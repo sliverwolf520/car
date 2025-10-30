@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>車禍追蹤網頁</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        .container { display: flex; gap: 20px; flex-wrap: wrap; }
+        .form-section { width: 100%; max-width: 400px; }
+        .form-section label { display: block; margin-bottom: 10px; }
+        .form-section input { width: 100%; padding: 8px; margin-bottom: 15px; }
+        .form-section button { padding: 10px 20px; font-size: 16px; }
+        #distance { margin-top: 10px; font-weight: bold; }
+        #map { flex: 1; min-width: 400px; height: 600px; }
+    </style>
+</head>
+<body>
+
+<h2>🚨 車禍位置追蹤系統</h2>
+
+<div class="container">
+    <!-- 左邊輸入表單 -->
+    <div class="form-section">
+        <label>現在位置緯度：<input type="number" step="any" id="lat1" placeholder="自動填入"></label>
+        <label>現在位置經度：<input type="number" step="any" id="lng1" placeholder="自動填入"></label>
+        <label>車禍緯度：<input type="number" step="any" id="lat2" placeholder="Firebase 自動更新"></label>
+        <label>車禍經度：<input type="number" step="any" id="lng2" placeholder="Firebase 自動更新"></label>
+
+        <button onclick="showOnMap()">顯示位置與路線</button>
+        <p id="distance"></p>
+
+        <!-- 支援需求區塊 -->
+        <h3>🚨 需要的支援</h3>
+        <p>報警：<span id="need_report">載入中...</span></p>
+        <p>救護車：<span id="need_ambulance">載入中...</span></p>
+        <p>消防車：<span id="need_fire_truck">載入中...</span></p>
+    </div>
+
+    <!-- 右邊地圖 -->
+    <div id="map"></div>
+</div>
+
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.2/firebase-database-compat.js"></script>
+
+<!-- Leaflet JS -->
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<script>
+    // ========== 🔹 Firebase 初始化 ==========
+    const firebaseConfig = {
+        apiKey: "AIzaSyDJ5_v1fwboIfwTRLoS1NnDMkOj8LQcCCU",
+        authDomain: "esp32-83d59.firebaseapp.com",
+        databaseURL: "https://esp32-83d59-default-rtdb.firebaseio.com",
+        projectId: "esp32-83d59",
+        storageBucket: "esp32-83d59.firebasestorage.app",
+        messagingSenderId: "312257620869",
+        appId: "1:312257620869:web:53d35c84d801de75f2b2ec",
+        measurementId: "G-GK6156PXKF"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.database();
+
+    // ========== 🔹 Leaflet 地圖設定 ==========
+    const apiKey = 'eyJvcmciOiI1YjNjZTM1OTc4NTExMTAwMDFjZjYyNDgiLCJpZCI6ImQxMjMyNjg0NzVjZDQ0MTE5YjE1M2ViYmVlZDMyYTc1IiwiaCI6Im11cm11cjY0In0=';
+
+    let map = L.map('map').setView([25.04, 121.56], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors'
+    }).addTo(map);
+
+    let userMarker, marker1, marker2, routeLine;
+
+    // ========== 🔹 顯示路線函式 ==========
+    async function showOnMap() {
+        const lat1 = parseFloat(document.getElementById("lat1").value);
+        const lng1 = parseFloat(document.getElementById("lng1").value);
+        const lat2 = parseFloat(document.getElementById("lat2").value);
+        const lng2 = parseFloat(document.getElementById("lng2").value);
+
+        if (isNaN(lat1) || isNaN(lng1) || isNaN(lat2) || isNaN(lng2)) {
+            alert("請輸入有效的經緯度數值");
+            return;
+        }
+
+        if (marker1) map.removeLayer(marker1);
+        if (marker2) map.removeLayer(marker2);
+        if (routeLine) map.removeLayer(routeLine);
+
+        marker1 = L.marker([lat1, lng1]).addTo(map).bindPopup("現在位置").openPopup();
+        marker2 = L.marker([lat2, lng2]).addTo(map).bindPopup("車禍地點");
+
+        try {
+            const response = await fetch('https://api.openrouteservice.org/v2/directions/driving-car/geojson', {
+                method: 'POST',
+                headers: {
+                    'Authorization': apiKey,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ coordinates: [[lng1, lat1], [lng2, lat2]] })
+            });
+
+            if (!response.ok) throw new Error("API 回應錯誤");
+
+            const data = await response.json();
+            const coords = data.features[0].geometry.coordinates.map(c => [c[1], c[0]]);
+
+            routeLine = L.polyline(coords, { color: 'blue' }).addTo(map);
+            map.fitBounds(routeLine.getBounds(), { padding: [50, 50] });
+
+            const distance = (data.features[0].properties.summary.distance / 1000).toFixed(2);
+            const duration = (data.features[0].properties.summary.duration / 60).toFixed(1);
+            document.getElementById("distance").innerText =
+                `汽車路線距離：約 ${distance} 公里，預估時間：約 ${duration} 分鐘`;
+        } catch (err) {
+            alert("查詢路線時發生錯誤：" + err.message);
+        }
+    }
+
+    // ========== 🔹 Firebase 實時更新 ==========
+    const crashRef = db.ref("crash_report");
+    crashRef.on("value", (snapshot) => {
+        const data = snapshot.val();
+        if (data) {
+            // 更新車禍位置
+            if (data.latitude !== undefined) document.getElementById("lat2").value = data.latitude;
+            if (data.longitude !== undefined) document.getElementById("lng2").value = data.longitude;
+
+            // 更新需要的支援
+            document.getElementById("need_report").innerText = data.report ? "需要" : "不需要";
+            document.getElementById("need_ambulance").innerText = data.ambulance ? "需要" : "不需要";
+            document.getElementById("need_fire_truck").innerText = data.fire_truck ? "需要" : "不需要";
+        }
+    });
+
+    // ========== 🔹 取得並顯示使用者位置 ==========
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition((pos) => {
+            const lat = pos.coords.latitude;
+            const lng = pos.coords.longitude;
+            document.getElementById("lat1").value = lat.toFixed(6);
+            document.getElementById("lng1").value = lng.toFixed(6);
+
+            // 在地圖上顯示使用者位置
+            if (userMarker) map.removeLayer(userMarker);
+            userMarker = L.marker([lat, lng]).addTo(map).bindPopup("您的位置").openPopup();
+
+            // 地圖中心移到使用者位置
+            map.setView([lat, lng], 14);
+        }, (err) => { console.warn("無法取得位置：", err.message); });
+    } else {
+        alert("您的瀏覽器不支援定位功能");
+    }
+</script>
+
+</body>
+</html>
